@@ -24,6 +24,7 @@ interface GlobalConstants
      //Status
     String REGISTER_HEAD = ":register";
     String LOGIN_HEAD = ":login";
+    String LOGOUT_HEAD = ":logout";
 
     //Chat
     String CREATE_CHAT_HEAD = ":createchat";
@@ -346,6 +347,7 @@ class client_controller implements Runnable, GlobalConstants{
     Socket socket;
     BufferedReader reader; //read from client
     PrintWriter writer; //write to client
+    String username;
 
     //GUI handler
     boolean running;
@@ -358,6 +360,7 @@ class client_controller implements Runnable, GlobalConstants{
 
     public client_controller (Socket client, DocumentController docController, ArrayList<client_controller> c_client,HashMap<String, String> ListAccount) {
         try {
+            this.username = null;
             this.running = true;
             this.socket = client;
             this.document = docController;
@@ -380,7 +383,7 @@ class client_controller implements Runnable, GlobalConstants{
                 System.out.println("Listen reader");
                 String receiveMsg = reader.readLine();
                 //String receiveMsg = (new Scanner(socket.getInputStream())).nextLine();
-                System.out.println(receiveMsg);
+                //System.out.println(receiveMsg);
 
                 String[] spliMsgs = receiveMsg.split(",", 2);
 
@@ -391,15 +394,27 @@ class client_controller implements Runnable, GlobalConstants{
                     contentMsg = spliMsgs[1];
                 }
 
+                if (!headMsg.equals(FILE_SEND_HEAD)) {
+                    System.out.println(receiveMsg);
+                }
+
                 switch (headMsg) {
                     case REGISTER_HEAD: {
-                        String[] splitMsg = contentMsg.split(",", 2);
-                        clientRegister(splitMsg[0], splitMsg[1]);
+                        String[] splitMsg = contentMsg.split(",");
+                        if (spliMsgs.length > 2) {
+                            send(FAIL_HEAD + "," + REGISTER_HEAD);
+                        } else {
+                            clientRegister(splitMsg[0], splitMsg[1]);
+                        }
                         break;
                     }
                     case LOGIN_HEAD: {
                         String[] splitMsg = contentMsg.split(",", 2);
                         clientLogin(splitMsg[0], splitMsg[1]);
+                        break;
+                    }
+                    case LOGOUT_HEAD: {
+                        clientLogout();
                         break;
                     }
                     case CREATE_CHAT_HEAD: {
@@ -409,6 +424,11 @@ class client_controller implements Runnable, GlobalConstants{
                     case CHAT_HEAD: {
                         String[] splitMsgChat = contentMsg.split(",", 2);
                         chat(splitMsgChat[0], splitMsgChat[1]);
+                        break;
+                    }
+                    case FILE_SEND_HEAD: {
+                        String[] splitMsgFile = contentMsg.split(",", 2);
+                        fileRouter(splitMsgFile[0], splitMsgFile[1]);
                         break;
                     }
                     case DISCONNECT_HEAD: {
@@ -450,8 +470,31 @@ class client_controller implements Runnable, GlobalConstants{
         }
     }
 
-    void clientLogin(String username, String password) {
+    boolean isCorrectPassword(String username, String password) {
+        for (Map.Entry<String, String> entry : this.Account.entrySet()) {
+            String name = entry.getKey();
 
+            if (name.equals(username)) {
+                String psw = entry.getValue();
+                return psw.equals(password);
+            }
+        }
+
+        return false;
+    }
+
+    void clientLogin(String usernameLogin, String password) {
+        if (isCorrectPassword(usernameLogin, password)) {
+            this.username = usernameLogin;
+            send(SUCCESS_HEAD + "," + LOGIN_HEAD);
+            //Send list of user
+        } else {
+            send(FAIL_HEAD + "," + LOGIN_HEAD);
+        }
+    }
+
+    void clientLogout() {
+        this.username = null;
     }
 
     void createChat(String name) {
@@ -467,7 +510,26 @@ class client_controller implements Runnable, GlobalConstants{
     }
 
     void chat(String name, String message) {
+        for (client_controller c : clients) {
+            String cUsername = c.getUsername();
+            if (!cUsername.isEmpty()) {
+                if (name.equals(cUsername)) {
+                    c.send(CHAT_HEAD + "," + this.username + "," + message);
+                }
+            }
+        }
+    }
 
+    void fileRouter(String name, String file) {
+        System.out.println("file from: " + name);
+        for (client_controller c : clients) {
+            String cUsername = c.getUsername();
+            if (c.username != null && !cUsername.isEmpty()) {
+                if (name.equals(cUsername)) {
+                    c.send(FILE_SEND_HEAD + "," + this.username + "," + file);
+                }
+            }
+        }
     }
 
     public void send(String message) {
@@ -483,13 +545,22 @@ class client_controller implements Runnable, GlobalConstants{
         }
     }
 
+    public String getUserList() {
+        return null;
+    }
+
     public String getIPLocalNameString() {
         return this.socket.getLocalSocketAddress().toString();
+    }
+
+    public String getUsername() {
+        return this.username;
     }
 
     public void close_connection() {
         try {
             this.document.insertMessageHTMLNewLine("<b>" + this.getIPLocalNameString() + "</b> DISCONNECTED!!");
+            username = null;
             writer.close();
             reader.close();
             socket.close();
