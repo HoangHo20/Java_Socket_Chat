@@ -251,6 +251,7 @@ class svNet implements Runnable {
             c.close_connection();
         }
 
+        this.clients.clear();
         this.running = false;
     }
 
@@ -559,6 +560,7 @@ class client_controller implements Runnable, GlobalConstants{
 
     public void close_connection() {
         try {
+            this.running = false;
             this.document.insertMessageHTMLNewLine("<b>" + this.getIPLocalNameString() + "</b> DISCONNECTED!!");
             username = null;
             writer.close();
