@@ -2,6 +2,8 @@ import javax.swing.*;
 import javax.swing.text.Document;
 import javax.swing.text.Style;
 import javax.swing.text.StyledDocument;
+import javax.swing.text.html.HTMLDocument;
+import javax.swing.text.html.HTMLEditorKit;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
@@ -16,8 +18,12 @@ interface GlobalConstants
     String DISCONNECT_HEAD = ":disconnect";
 
     //Status msg
-     String SUCCESS_HEAD = ":success";
-     String FAIL_HEAD = ":fail";
+    String SUCCESS_HEAD = ":success";
+    String FAIL_HEAD = ":fail";
+
+     //Status
+    String REGISTER_HEAD = ":register";
+    String LOGIN_HEAD = ":login";
 
     //Chat
     String CREATE_CHAT_HEAD = ":createchat";
@@ -50,9 +56,15 @@ class DocumentController {
 
     Dialog dialog = new Dialog();
 
+    //HTML
+    HTMLDocument htmlDoc;
+    HTMLEditorKit htmlEdit;
+
     public DocumentController (JTextPane textPane, StyledDocument styleDoc) {
         this.messagePane = textPane;
         this.doc = styleDoc;
+        this.htmlDoc = (HTMLDocument)messagePane.getDocument();
+        this.htmlEdit = (HTMLEditorKit)messagePane.getEditorKit();
     }
 
     public void insertMessage(String message) {
@@ -70,6 +82,24 @@ class DocumentController {
             dialog.showDialog(e.toString());
         }
     }
+
+    public void insertMessageHTMLNewLine(String message) {
+        try {
+            this.htmlEdit.insertHTML(this.htmlDoc, this.htmlDoc.getLength(), message + "<br>", 0, 0, null);
+            this.messagePane.setCaretPosition(this.htmlDoc.getLength());
+        } catch (Exception e) {
+            dialog.showDialog(e.toString());
+        }
+    }
+
+    public void insertMessageHTMLCurrentLine(String message) {
+        try {
+            this.htmlEdit.insertHTML(this.htmlDoc, this.htmlDoc.getLength(), message, 0, 0, null);
+            this.messagePane.setCaretPosition(this.htmlDoc.getLength());
+        } catch (Exception e) {
+            dialog.showDialog(e.toString());
+        }
+    }
 }
 
 class svGUI implements ActionListener {
@@ -80,6 +110,9 @@ class svGUI implements ActionListener {
     JFrame frame;
     Dialog dialog;
 
+    //message area controller
+    DocumentController document;
+
     //Server
     svNet server_controller;
     Thread serverThread;
@@ -89,6 +122,7 @@ class svGUI implements ActionListener {
 
         startBtn = new JButton("Start Server >");
         startBtn.setActionCommand("start");
+        startBtn.setFont(new Font("Arial", Font.BOLD, 22));
         startBtn.addActionListener(this);
 
         dialog = new Dialog();
@@ -118,6 +152,7 @@ class svGUI implements ActionListener {
         messageArea.setEditable(false);
         messageArea.setContentType("text/html");
         doc = messageArea.getStyledDocument();
+        this.document = new DocumentController(this.messageArea, this.doc);
         JScrollPane p = new JScrollPane(messageArea);
         p.setPreferredSize(new Dimension(800, 500));
         c.gridx = c.gridy = 0;
@@ -152,13 +187,26 @@ class svGUI implements ActionListener {
             serverThread.start();
 
             this.startBtn.setActionCommand("stop");
+            this.startBtn.setForeground(Color.WHITE);
+            this.startBtn.setBackground(Color.RED);
+            this.startBtn.setText("Stop");
+
+            this.document.insertMessageHTMLNewLine("<span style='color:red'><b>SERVER IS NOW ONLINE</b></span>");
         }
         if (cmd.equals("stop")) {
-            serverThread.interrupt();
             server_controller.stop();
+            serverThread.interrupt();
             server_controller.closeSV();
 
+            this.startBtn.setForeground(Color.BLACK);
+            this.startBtn.setBackground(null);
+            this.startBtn.setText("Start Server >");
             this.startBtn.setActionCommand("start");
+
+            this.document.insertMessageHTMLNewLine("<span style='color:red'><b>SERVER HAS GONE OFFLINE</b></span>");
+            this.server_controller.saveAccount(); //Save account list
+
+
         }
     }
 }
@@ -177,21 +225,20 @@ class svNet implements Runnable {
     ArrayList<client_controller> clients;
 
     Dialog dialog = new Dialog();
-
-    ArrayList<client> Clients;
     private static String accountPath = "resources/account.txt";
 
     HashMap<String, String> Account = null;
 
     public svNet(JTextPane textPane, StyledDocument styleDoc) {
-        readAccount();
+        readAccount(); //load user file
         try {
             this.running = true;
             this.server = new ServerSocket(0);
             this.serverPort = server.getLocalPort();
             this.document = new DocumentController(textPane, styleDoc);
+            this.clients = new ArrayList<client_controller>();
 
-            this.document.insertMessage("Server start on port: " + this.serverPort);
+            this.document.insertMessageHTMLNewLine("Server start on port: <span style='color:red'><b>" + this.serverPort + "</b></span>");
         } catch (Exception e) {
             //Error
             dialog.showDialog(e.toString());
@@ -199,6 +246,10 @@ class svNet implements Runnable {
     }
 
     public void stop(){
+        for (client_controller c : clients) {
+            c.close_connection();
+        }
+
         this.running = false;
     }
 
@@ -273,13 +324,16 @@ class svNet implements Runnable {
     public void run() {
         while (this.running) {
             try {
-                Socket client_comming = server.accept();
+                Socket clientcomming = server.accept();
+                System.out.print(clientcomming.getLocalAddress() + " - " + clientcomming.getRemoteSocketAddress());
 
-                client_controller client = new client_controller(client_comming, this.document);
-                Thread t = new Thread(client);
+                client_controller c_client = new client_controller(clientcomming, this.document, this.clients, this.Account);
+
+                this.clients.add(c_client);
+                Thread t = new Thread(c_client);
                 t.start();
 
-                document.insertMessage(client_comming.getLocalSocketAddress().toString());
+                document.insertMessageHTMLNewLine("<span><b>" + clientcomming.getRemoteSocketAddress().toString() +"<b></span> Has join the server");
             } catch (Exception e) {
                 dialog.showDialog(e.toString());
             }
@@ -288,19 +342,27 @@ class svNet implements Runnable {
 }
 
 class client_controller implements Runnable, GlobalConstants{
+    //Socket handler
     Socket socket;
     BufferedReader reader; //read from client
     PrintWriter writer; //write to client
+
+    //GUI handler
     boolean running;
     Dialog dialog = new Dialog();
-
     DocumentController document;
 
-    public client_controller (Socket client, DocumentController docController) {
+    //Control itself and others (references)
+    ArrayList<client_controller>  clients;
+    HashMap<String, String> Account;
+
+    public client_controller (Socket client, DocumentController docController, ArrayList<client_controller> c_client,HashMap<String, String> ListAccount) {
         try {
             this.running = true;
             this.socket = client;
             this.document = docController;
+            this.clients = c_client;
+            this.Account = ListAccount;
             this.writer = new PrintWriter(
                     new BufferedWriter(
                             new OutputStreamWriter(client.getOutputStream())
@@ -315,7 +377,10 @@ class client_controller implements Runnable, GlobalConstants{
     public void run() {
         while (this.running) {
             try {
+                System.out.println("Listen reader");
                 String receiveMsg = reader.readLine();
+                //String receiveMsg = (new Scanner(socket.getInputStream())).nextLine();
+                System.out.println(receiveMsg);
 
                 String[] spliMsgs = receiveMsg.split(",", 2);
 
@@ -327,12 +392,18 @@ class client_controller implements Runnable, GlobalConstants{
                 }
 
                 switch (headMsg) {
-                    case CREATE_CHAT_HEAD: {
-                        createChat(contentMsg);
+                    case REGISTER_HEAD: {
+                        String[] splitMsg = contentMsg.split(",", 2);
+                        clientRegister(splitMsg[0], splitMsg[1]);
                         break;
                     }
-                    case JOIN_CHAT_HEAD: {
-                        joinChat(contentMsg);
+                    case LOGIN_HEAD: {
+                        String[] splitMsg = contentMsg.split(",", 2);
+                        clientLogin(splitMsg[0], splitMsg[1]);
+                        break;
+                    }
+                    case CREATE_CHAT_HEAD: {
+                        createChat(contentMsg);
                         break;
                     }
                     case CHAT_HEAD: {
@@ -340,51 +411,89 @@ class client_controller implements Runnable, GlobalConstants{
                         chat(splitMsgChat[0], splitMsgChat[1]);
                         break;
                     }
-                    case LEAVE_CHAT_HEAD: {
-
-                        break;
-                    }
-                    case UPLOAD_HEAD: {
-
-                        break;
-                    }
-                    case DOWNLOAD_REQUEST_HEAD: {
-
-                        break;
-                    }
                     case DISCONNECT_HEAD: {
                         this.running = false;
 
                         //Close connection
-                        writer.close();
-                        reader.close();
-                        socket.close();
+                        close_connection();
                         break;
                     }
                 }
             }catch (Exception e) {
                 //Error
                 dialog.showDialog(e.toString());
+                this.running = false;
             }
         }
     }
 
+    boolean isUserNameExist(String username) {
+        for (Map.Entry<String, String> entry : this.Account.entrySet()) {
+            String name = entry.getKey();
+
+            if (name.equals(username)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void clientRegister(String username, String password) {
+
+        if (isUserNameExist(username)) {
+            send(FAIL_HEAD + "," + REGISTER_HEAD); //send back status
+        } else {
+            this.Account.put(username, password);
+            send(SUCCESS_HEAD + "," + REGISTER_HEAD); //send back status
+            document.insertMessageHTMLNewLine("A username: <span style:'color:red'><b>" + username + "</b></span> has registered from <b>" + this.getIPLocalNameString() + "</b>");
+        }
+    }
+
+    void clientLogin(String username, String password) {
+
+    }
+
     void createChat(String name) {
-        
+        for (client_controller c : clients) {
+            if (c == this) {
+                dialog.showDialog("Bằng nhau \n" + c.getIPLocalNameString() + " == " + this.getIPLocalNameString());
+            }
+        }
     }
 
     void joinChat(String name) {
 
     }
 
-    void chat(String groupName, String message) {
+    void chat(String name, String message) {
 
     }
 
     public void send(String message) {
         try {
+            //System.out.println(message);
             writer.println(message);
+            writer.flush();
+//            PrintStream p = new PrintStream(socket.getOutputStream());
+//            p.println(message);
         }catch (Exception e) {
+            //Error
+            dialog.showDialog(e.toString());
+        }
+    }
+
+    public String getIPLocalNameString() {
+        return this.socket.getLocalSocketAddress().toString();
+    }
+
+    public void close_connection() {
+        try {
+            this.document.insertMessageHTMLNewLine("<b>" + this.getIPLocalNameString() + "</b> DISCONNECTED!!");
+            writer.close();
+            reader.close();
+            socket.close();
+        } catch (Exception e) {
             //Error
             dialog.showDialog(e.toString());
         }
