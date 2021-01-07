@@ -25,6 +25,7 @@ interface GlobalConstants
     String REGISTER_HEAD = ":register";
     String LOGIN_HEAD = ":login";
     String LOGOUT_HEAD = ":logout";
+    String LIST_USER_ONLINE = ":listonline";
 
     //Chat
     String CREATE_CHAT_HEAD = ":createchat";
@@ -484,11 +485,24 @@ class client_controller implements Runnable, GlobalConstants{
         return false;
     }
 
+    boolean isUserLogin(String usernameLogin) {
+        for (client_controller c : clients) {
+            String name = c.getUsername();
+            if (name != null && !name.isBlank() && name.equals(usernameLogin)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     void clientLogin(String usernameLogin, String password) {
-        if (isCorrectPassword(usernameLogin, password)) {
+        //Check user is login
+        if (!isUserLogin(usernameLogin) && isCorrectPassword(usernameLogin, password)) {
             this.username = usernameLogin;
             send(SUCCESS_HEAD + "," + LOGIN_HEAD);
             //Send list of user
+            SendListOnlineToAllUser();
         } else {
             send(FAIL_HEAD + "," + LOGIN_HEAD);
         }
@@ -496,6 +510,8 @@ class client_controller implements Runnable, GlobalConstants{
 
     void clientLogout() {
         this.username = null;
+        send(SUCCESS_HEAD + "," + LOGOUT_HEAD);
+        SendListOnlineToAllUser();
     }
 
     void createChat(String name) {
@@ -513,7 +529,7 @@ class client_controller implements Runnable, GlobalConstants{
     void chat(String name, String message) {
         for (client_controller c : clients) {
             String cUsername = c.getUsername();
-            if (!cUsername.isEmpty()) {
+            if (cUsername != null && !cUsername.isEmpty()) {
                 if (name.equals(cUsername)) {
                     c.send(CHAT_HEAD + "," + this.username + "," + message);
                 }
@@ -546,8 +562,59 @@ class client_controller implements Runnable, GlobalConstants{
         }
     }
 
-    public String getUserList() {
-        return null;
+    public void sendToAllClients(String message) {
+        try {
+            for (client_controller c : clients) {
+                String name = c.getUsername();
+                if (name != null && !name.isBlank()) {
+                    c.writer.println(message);
+                    c.writer.flush();
+                }
+            }
+        }catch (Exception e) {
+            //Error
+            dialog.showDialog(e.toString());
+        }
+    }
+
+    public String getAllUserList() {
+        String list = "";
+
+        for (client_controller c : clients) {
+            String name = c.getUsername();
+
+            if (name != null && !name.isBlank()) {
+                list += name + ",";
+            }
+        }
+
+        return list;
+    }
+
+    public void SendListOnlineToAllUser() {
+        for (client_controller c : clients) {
+            String name = c.getUsername();
+
+            if (name != null && !name.isBlank()) {
+                String userList = c.getUserListExceptMe();
+
+                c.send(LIST_USER_ONLINE + "," + userList);
+            }
+        }
+    }
+
+    public String getUserListExceptMe() {
+        String list = "";
+
+        for (client_controller c : clients) {
+            String name = c.getUsername();
+
+            if (name != null && !name.isBlank() && !name.equals(this.username)) {
+                list += name + ",";
+            }
+        }
+
+        return list;
     }
 
     public String getIPLocalNameString() {
@@ -562,7 +629,7 @@ class client_controller implements Runnable, GlobalConstants{
         try {
             this.running = false;
             this.document.insertMessageHTMLNewLine("<b>" + this.getIPLocalNameString() + "</b> DISCONNECTED!!");
-            username = null;
+            this.username = null;
             writer.close();
             reader.close();
             socket.close();
